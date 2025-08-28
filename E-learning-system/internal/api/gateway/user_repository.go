@@ -1,0 +1,244 @@
+package gateway
+
+import (
+	"database/sql"
+	"e-learning-system/internal/domain/model"
+	"e-learning-system/internal/domain/repository"
+	"github.com/gofrs/uuid"
+	"fmt"
+	"log"
+	"time"
+)
+
+type userRepositoryImpl struct {
+	db *sql.DB
+}
+
+// Create implements repository.UserRepository.
+func (r *userRepositoryImpl) Create(user *model.User) error {
+
+	query := `SELECT create_user($1, $2, $3, $4, $5 );`
+
+	err := r.db.QueryRow(
+		query,
+		user.Email,
+		user.Password,
+		user.FirstName,
+		user.LastName,
+		user.Role,
+	).Scan(&user.ID)
+
+	if err != nil {
+		log.Printf("Error calling create_user: %v", err)
+		return err
+	}
+
+	log.Printf("User created with ID: %s", user.ID)
+	return nil
+}
+
+
+// Delete implements repository.UserRepository.
+func (r *userRepositoryImpl) Delete(userID uuid.UUID) error {
+	var rowsDeleted int
+
+	err := r.db.QueryRow("SELECT delete_user($1)", userID).Scan(&rowsDeleted)
+	if err != nil {
+		log.Printf("Error calling delete_user: %v", err)
+		return err
+	}
+
+	if rowsDeleted == 0 {
+		log.Printf("User not found")
+		return fmt.Errorf("user not found")
+	}
+
+	log.Printf("User deleted")
+	return nil
+}
+
+// Find user by email
+func (r *userRepositoryImpl) FindByEmail(email string) (*model.User, error) {
+	var user model.User
+
+	query := `SELECT * FROM get_user_by_email($1)`
+	err := r.db.QueryRow(query, email).Scan(
+		&user.ID,
+		&user.Email,
+		&user.Password,
+		&user.FirstName,
+		&user.LastName,
+		&user.Role,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		log.Printf("DB error: %v", err)
+		return nil, fmt.Errorf("failed to find user: %w", err)
+	}
+
+	
+
+	return &user, nil
+}
+
+
+// GetByID implements repository.UserRepository.
+func (r *userRepositoryImpl) Get(userID uuid.UUID) (*model.User, error) {
+	var user model.User
+
+	query := `SELECT * FROM get_user_by_id($1)`
+	err := r.db.QueryRow(query, userID).Scan(
+		&user.ID,
+		&user.Email,
+		&user.Password,
+		&user.FirstName,
+		&user.LastName,
+		&user.Role,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("User not found")
+			return nil, fmt.Errorf("user not found")
+		}
+		log.Printf("DB error: %v", err)
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// List implements repository.UserRepository.
+// List all users
+func (r *userRepositoryImpl) List() ([]*model.User, error) {
+	rows, err := r.db.Query("SELECT * FROM get_all_users()")
+	if err != nil {
+		log.Printf("Error getting users: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*model.User
+
+	for rows.Next() {
+		var user model.User
+		err := rows.Scan(
+			&user.ID,
+			&user.Email,
+			&user.Password,
+			&user.FirstName,
+			&user.LastName,
+			&user.Role,
+			&user.CreatedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			log.Printf("Error scanning user: %v", err)
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Error with user rows: %v", err)
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// Update implements repository.UserRepository.
+func (r *userRepositoryImpl) Update(user *model.User) error {
+	query := `CALL update_user($1, $2, $3, $4, $5, $6, $7)`
+	var updatedAt time.Time
+
+	err := r.db.QueryRow(
+		query,
+		user.ID,
+		user.Email,
+		user.Password,
+		user.FirstName,
+		user.LastName,
+		user.Role,
+		user.UpdatedAt,
+	).Scan(&updatedAt)
+
+	if err != nil {
+		log.Printf("Error updating user: %v", err)
+		return err
+	}
+
+	user.UpdatedAt = updatedAt
+	log.Printf("User updated at: %v", updatedAt)
+	return nil
+}
+
+// SetResetToken saves reset token and expiry
+func (r *userRepositoryImpl) SetResetToken(email string, token uuid.UUID, expiry string) error {
+	query := `SELECT set_reset_token($1, $2, $3)`
+	_, err := r.db.Exec(query, email, token, expiry)
+	if err != nil {
+		log.Printf("Error setting reset token: %v", err)
+		return fmt.Errorf("failed to set reset token: %w", err)
+	}
+	return nil
+}
+
+// FindByResetToken finds user by reset token
+func (r *userRepositoryImpl) FindByResetToken(token uuid.UUID) (*model.User, error) {
+	var user model.User
+
+	query := `SELECT * FROM get_user_by_reset_token($1)`
+	err := r.db.QueryRow(query, token).Scan(
+		&user.ID,
+		&user.Email,
+		&user.Password,
+		&user.FirstName,
+		&user.LastName,
+		&user.Role,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			log.Printf("Reset token invalid or expired")
+			return nil, fmt.Errorf("reset token invalid or expired")
+		}
+		log.Printf("DB error: %v", err)
+		return nil, fmt.Errorf("failed to find user by reset token: %w", err)
+	}
+
+
+
+	return &user, nil
+}
+
+// UpdatePassword updates the user's hashed password
+func (r *userRepositoryImpl) UpdatePassword(userID uuid.UUID, hashedPassword string) error {
+	query := `SELECT update_user_password($1, $2)`
+	_, err := r.db.Exec(query, userID, hashedPassword)
+	if err != nil {
+		log.Printf("Error updating password: %v", err)
+		return fmt.Errorf("failed to update password: %w", err)
+	}
+	return nil
+}
+
+// ClearResetToken clears the reset token fields
+func (r *userRepositoryImpl) ClearResetToken(userID uuid.UUID) error {
+	query := `SELECT clear_reset_token($1)`
+	_, err := r.db.Exec(query, userID)
+	if err != nil {
+		log.Printf("Error clearing reset token: %v", err)
+		return fmt.Errorf("failed to clear reset token: %w", err)
+	}
+	return nil
+}
+
+func NewUserRepositry(db *sql.DB) repository.UserRepository {
+	return &userRepositoryImpl{db: db}
+}
